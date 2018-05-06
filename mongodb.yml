@@ -1,0 +1,98 @@
+stack: tero/mongodb
+version: 0.1.0
+expose: mongo
+variables:
+  reset_passwords:
+    type: boolean
+    from:
+      prompt: Reset all default passwords during initial stack installation?
+
+  mongodb_admin_password_secret:
+    only_if: reset_passwords
+    type: string
+    from:
+      vault: mongodb_admin_password_secret
+      random_string: 40
+    to:
+      vault: mongodb_admin_password_secret
+
+  mongodb_graylog_username:
+    type: string
+    default: graylog
+    from:
+      prompt: Username for MongoDB graylog user
+    to:
+      vault: mongodb_graylog_username
+
+  mongodb_graylog_password_secret:
+    only_if: reset_passwords
+    type: string
+    from:
+      vault: mongodb_graylog_password_secret
+      random_string: 40
+    to:
+      vault: mongodb_graylog_password_secret
+
+  affinity:
+    type: string
+    required: false
+    from:
+      prompt: Affinity rule for MongoDB
+
+services:
+  mongo:
+    image: mongo:3
+    stateful: true
+    command: --smallfiles
+    instances: 1
+
+    deploy:
+      strategy: ha
+      wait_for_port: 27017
+
+    health_check:
+      protocol: tcp
+      port: 27017
+      interval: 20
+      timeout: 2
+
+    affinity:
+      # {% if affinity %}
+      - {{ affinity }}
+      # {% endif %}
+
+    volumes:
+      - mongo-data:/data/db
+
+    secrets:
+      - secret: mongodb_graylog_username
+        name: MONGODB_GRAYLOG_USERNAME
+        type: env
+      - secret: mongodb_graylog_password_secret
+        name: MONGODB_GRAYLOG_PASSWORD
+        type: env
+      - secret: mongodb_admin_password_secret
+        name: MONGODB_ADMIN_PASSWORD
+        type: env
+
+    hooks:
+      post_start:
+        - name: Wait for MongoDB to startup
+          cmd: while ! (echo 'db.runCommand("ping").ok' | mongo localhost:27017/test --quiet) > /dev/null 2>&1; do sleep 1; done
+          instances: "*"
+          oneshot: true
+
+        - name: Create user for graylog database
+          cmd: mongo graylog --eval "db.createUser({'user':\"$$MONGODB_GRAYLOG_USERNAME\", pwd:\"$$MONGODB_GRAYLOG_PASSWORD\", 'roles':[{'role':'readWrite','db':'graylog'}]});"
+          instances: "*"
+          oneshot: true
+
+        - name: Create admin user
+          cmd: mongo admin --eval "db.createUser({'user':'admin', 'pwd':\"$$MONGODB_ADMIN_PASSWORD\", 'roles':[{'role':'root','db':'admin'}]});"
+          instances: "*"
+          oneshot: true
+
+volumes:
+  mongo-data:
+    external:
+      name: mongo-data

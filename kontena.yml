@@ -1,0 +1,114 @@
+stack: tero/graylog
+version: 0.1.0
+description: Graylock stack for log storage and analytics using Graylock, Elasticsearch and MongoDB.
+depends:
+    mongodb:
+      stack: mongodb.yml
+
+    elasticsearch:
+      stack: elasticsearch.yml
+
+    gelf:
+      stack: gelf.yml
+
+variables:
+  reset_passwords:
+    type: boolean
+    from:
+      prompt: Reset all default passwords during initial stack installation?
+
+  graylog_password_secret:
+    only_if: reset_passwords
+    type: string
+    from:
+      vault: graylog_password_secret
+      random_string: 64
+    to:
+      vault: graylog_password_secret
+
+  mongodb_graylog_username:
+    type: string
+    from:
+      vault: mongodb_graylog_username
+
+  mongodb_graylog_password:
+    type: string
+    from:
+      vault: mongodb_graylog_password_secret
+
+  elasticsearch_host:
+    type: string
+    default: elasticsearch.graylog-elasticsearch.${GRID}.kontena.local
+    from:
+      prompt: Elasticsearch host
+
+  elasticsearch_port:
+    type: integer
+    default: 9200
+    from:
+      prompt: Elasticsearch port
+
+  mongodb_host:
+    type: string
+    default: mongo.graylog-mongodb.${GRID}.kontena.local
+    from:
+      prompt: MongoDB host
+
+  affinity:
+    type: string
+    required: false
+    from:
+      prompt: Affinity rule for Graylog
+
+  loadbalancer:
+    type: string
+    from:
+      env: LOADBALANCER
+      service_link:
+        prompt: Choose a loadbalancer
+        image: kontena/lb
+
+  virtual_host:
+    only_if:
+      - loadbalancer
+    type: string
+    from:
+      env: VIRTUAL_HOSTS
+      prompt: Domain name for Graylog
+
+services:
+  graylog:
+    image: graylog/graylog:2.4
+    stateful: true
+    environment:
+      - GRAYLOG_ROOT_PASSWORD_SHA2=8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+      - GRAYLOG_ELASTICSEARCH_HOSTS=http://${elasticsearch_host}:${elasticsearch_port}
+      - GRAYLOG_WEB_ENDPOINT_URI=https://${virtual_host}/api
+      - GRAYLOG_MONGODB_URI=mongodb://${mongodb_graylog_username}:${mongodb_graylog_password}@${mongodb_host}/graylog
+      - KONTENA_LB_MODE=http
+      - KONTENA_LB_BALANCE=roundrobin
+      - KONTENA_LB_INTERNAL_PORT=9000
+      - KONTENA_LB_VIRTUAL_HOSTS=${virtual_host}
+
+    secrets:
+      - secret: graylog_password_secret
+        name: GRAYLOG_PASSWORD_SECRET
+        type: env
+
+    links:
+      # {% if loadbalancer %}
+      - ${loadbalancer}
+      # {% endif %}
+
+    affinity:
+      # {% if affinity %}
+      - ${affinity}
+      # {% endif %}
+
+    volumes:
+      - graylog-data:/usr/share/graylog/data/journal
+
+volumes:
+  graylog-data:
+    external:
+      name: graylog-data
